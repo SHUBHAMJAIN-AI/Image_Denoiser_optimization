@@ -283,25 +283,32 @@ if TORCH_AVAILABLE:
         def denoise(self, noisy_image: np.ndarray) -> np.ndarray:
             """Apply DnCNN denoising"""
             image = self.validate_input(noisy_image)
-            
-            # Handle color images by processing each channel
-            if image.ndim == 3:
-                denoised = np.zeros_like(image)
-                for c in range(image.shape[2]):
-                    denoised[:, :, c] = self._denoise_channel(image[:, :, c])
-                return denoised
-            else:
-                return self._denoise_channel(image)
-        
-        def _denoise_channel(self, channel: np.ndarray) -> np.ndarray:
-            """Denoise single channel"""
+
             # Convert to torch tensor
-            input_tensor = torch.from_numpy(channel).float().unsqueeze(0).unsqueeze(0)
+            # For color images: (H, W, C) -> (1, C, H, W)
+            # For grayscale: (H, W) -> (1, 1, H, W)
+            if image.ndim == 3:
+                # Color image: transpose from (H,W,C) to (C,H,W) then add batch dimension
+                input_tensor = torch.from_numpy(image).float().permute(2, 0, 1).unsqueeze(0)
+            else:
+                # Grayscale: add channel and batch dimensions
+                input_tensor = torch.from_numpy(image).float().unsqueeze(0).unsqueeze(0)
+
             input_tensor = input_tensor.to(self.device)
 
             with torch.no_grad():
                 output = self.model(input_tensor)
-                denoised = output.squeeze().cpu().numpy()
+                # output shape: (1, C, H, W)
+                denoised = output.squeeze(0).cpu().numpy()  # Remove batch dimension -> (C, H, W)
+
+            # Convert back to numpy format
+            if image.ndim == 3:
+                # Transpose back from (C, H, W) to (H, W, C)
+                denoised = denoised.transpose(1, 2, 0)
+            else:
+                # Grayscale: remove channel dimension if it's 1
+                if denoised.shape[0] == 1:
+                    denoised = denoised.squeeze(0)
 
             # Ensure float64 output
             return np.clip(denoised, 0.0, 1.0).astype(np.float64)
@@ -473,12 +480,13 @@ def compute_ssim(image1: np.ndarray, image2: np.ndarray) -> float:
         ssim = ((2*mu1*mu2 + c1) * (2*sigma12 + c2)) / ((mu1**2 + mu2**2 + c1) * (sigma1 + sigma2 + c2))
         return ssim
 
-def verify_dncnn_weights(device: str = 'cpu') -> bool:
+def verify_dncnn_weights(device: str = 'cpu', use_color: bool = True) -> bool:
     """
     Verify DnCNN pretrained weights loaded correctly.
 
     Args:
         device: Device to use for verification ('cpu' or 'cuda')
+        use_color: If True, test with RGB image; if False, test with grayscale
 
     Returns:
         True if weights appear to be working, False otherwise
@@ -488,7 +496,14 @@ def verify_dncnn_weights(device: str = 'cpu') -> bool:
         denoiser = DnCNNDenoiser(pretrained='download', device=device)
 
         # Create test image with some structure
-        test_img = np.random.rand(64, 64).astype(np.float64)
+        if use_color:
+            # RGB image (64x64x3) - pretrained model expects color images
+            test_img = np.random.rand(64, 64, 3).astype(np.float64)
+            print("  Testing with RGB image (64x64x3)")
+        else:
+            # Grayscale image (64x64)
+            test_img = np.random.rand(64, 64).astype(np.float64)
+            print("  Testing with grayscale image (64x64)")
 
         # Apply denoising
         result = denoiser.denoise(test_img)
