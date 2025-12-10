@@ -284,34 +284,47 @@ if TORCH_AVAILABLE:
             """Apply DnCNN denoising"""
             image = self.validate_input(noisy_image)
 
-            # Convert to torch tensor
-            # For color images: (H, W, C) -> (1, C, H, W)
-            # For grayscale: (H, W) -> (1, 1, H, W)
-            if image.ndim == 3:
-                # Color image: transpose from (H,W,C) to (C,H,W) then add batch dimension
-                input_tensor = torch.from_numpy(image).float().permute(2, 0, 1).unsqueeze(0)
-            else:
-                # Grayscale: add channel and batch dimensions
-                input_tensor = torch.from_numpy(image).float().unsqueeze(0).unsqueeze(0)
+            # Check if input is color
+            is_color = image.ndim == 3
 
+            # deepinv DnCNN pretrained model expects RGB (3 channels)
+            # If grayscale, convert to RGB by replicating
+            if is_color:
+                # Already RGB, use as-is
+                rgb_image = image
+            else:
+                # Grayscale: replicate to 3 channels
+                rgb_image = np.stack([image, image, image], axis=2)
+                print(f"  [DnCNN] Converting grayscale to RGB (replicate channels)...")
+
+            # Convert to torch tensor: (H, W, C) -> (1, C, H, W)
+            # Transpose from (H, W, C) to (C, H, W) then add batch dimension
+            input_tensor = torch.from_numpy(rgb_image).float().permute(2, 0, 1).unsqueeze(0)
             input_tensor = input_tensor.to(self.device)
 
-            with torch.no_grad():
-                output = self.model(input_tensor)
-                # output shape: (1, C, H, W)
-                denoised = output.squeeze(0).cpu().numpy()  # Remove batch dimension -> (C, H, W)
+            try:
+                with torch.no_grad():
+                    output = self.model(input_tensor)
+                    # output shape: (1, 3, H, W)
+                    denoised_rgb = output.squeeze(0).cpu().numpy()  # -> (3, H, W)
+                    # Transpose back to (H, W, 3)
+                    denoised_rgb = denoised_rgb.transpose(1, 2, 0)
+            except Exception as e:
+                print(f"  ⚠ DnCNN forward pass error: {e}")
+                print(f"  Input shape: {input_tensor.shape}, Expected: (1, 3, H, W)")
+                print(f"  Returning input unchanged as fallback")
+                return image
 
-            # Convert back to numpy format
-            if image.ndim == 3:
-                # Transpose back from (C, H, W) to (H, W, C)
-                denoised = denoised.transpose(1, 2, 0)
+            # If input was grayscale, convert back
+            if not is_color:
+                # Take average of 3 channels (should be similar since we replicated)
+                denoised = np.mean(denoised_rgb, axis=2)
+                denoised = np.clip(denoised, 0.0, 1.0)
             else:
-                # Grayscale: remove channel dimension if it's 1
-                if denoised.shape[0] == 1:
-                    denoised = denoised.squeeze(0)
+                denoised = np.clip(denoised_rgb, 0.0, 1.0)
 
             # Ensure float64 output
-            return np.clip(denoised, 0.0, 1.0).astype(np.float64)
+            return denoised.astype(np.float64)
 else:
     # Dummy class when PyTorch is not available
     class DnCNNDenoiser(BaseDenoiser):

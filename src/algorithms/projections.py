@@ -63,7 +63,8 @@ def project_l1_ball(v: np.ndarray, radius: float, validate: bool = False) -> np.
     threshold_candidates = (cumsum - radius) / indices
     
     # Find largest j such that τ_j < u_sorted[j-1] (using 0-based indexing)
-    valid_indices = np.where(threshold_candidates < u_sorted)[0]
+    # Add small tolerance for numerical stability with floating-point comparison
+    valid_indices = np.where(threshold_candidates < u_sorted + 1e-10)[0]
     
     if len(valid_indices) > 0:
         # Take the largest valid index

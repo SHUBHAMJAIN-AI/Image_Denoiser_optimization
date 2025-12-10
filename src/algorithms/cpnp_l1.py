@@ -23,8 +23,8 @@ from .projections import project_l1_ball, project_l2_ball
 class CPnPConfig:
     """Configuration for CPnP-ADMM algorithm"""
     constraint_type: str = 'l1'  # 'l1' or 'l2'
-    rho: float = 1.0             # ADMM penalty parameter
-    max_iter: int = 50           # Maximum iterations
+    rho: float = 1.0             # ADMM penalty parameter (standard value for image restoration)
+    max_iter: int = 100          # Maximum iterations
     tolerance: float = 1e-6      # Convergence tolerance
     verbose: bool = True         # Print progress
     store_history: bool = True   # Store convergence history
@@ -112,10 +112,17 @@ class RobustCPnP:
                 z_old = z.copy()
             
             # 1. x-update: Plug-and-Play step (Proximal operator of g)
-            #    x^{k+1} = argmin_x [g(x) + (ρ/2)||y - x - z^k + u^k||²]
-            #             = Denoiser(y - z^k + u^k)
-            denoiser_input = y - z + u
+            #    For constrained problem ||y-x||_p <= eps, the x-update should NOT include u
+            #    because u affects the constraint enforcement (z-update), not the denoiser
+            #    x^{k+1} = Denoiser(y - z^k)
+            denoiser_input = y - z  # NOTE: u removed to prevent accumulation issues
+            # Clip to valid range before denoising to prevent numerical issues
+            denoiser_input = np.clip(denoiser_input, 0.0, 1.0)
             x = self.denoiser(denoiser_input)
+
+            # Debug output for first iteration
+            if self.config.verbose and iteration == 0:
+                print(f"  Iter 0 debug: denoiser_input=[{denoiser_input.min():.4f}, {denoiser_input.max():.4f}], x=[{x.min():.4f}, {x.max():.4f}]")
             
             # 2. z-update: Constraint projection step (THE KEY INNOVATION)
             #    z^{k+1} = Proj_{||·||_p ≤ ε}(y - x^{k+1} + u^k)
@@ -137,12 +144,15 @@ class RobustCPnP:
             # Compute convergence metrics
             primal_residual = np.linalg.norm(y - x - z)
             dual_residual = self.config.rho * np.linalg.norm(z - z_old)
-            
-            # Compute constraint violation
+
+            # Compute constraint violation on actual residual (y - x), not z
+            actual_residual = y - x
             if self.config.constraint_type == 'l1':
-                constraint_violation = max(0, np.sum(np.abs(z)) - epsilon)
+                actual_norm = np.sum(np.abs(actual_residual))
+                constraint_violation = max(0, actual_norm - epsilon)
             else:
-                constraint_violation = max(0, np.linalg.norm(z) - epsilon)
+                actual_norm = np.linalg.norm(actual_residual)
+                constraint_violation = max(0, actual_norm - epsilon)
             
             # Store history
             if self.history is not None:
