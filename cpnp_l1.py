@@ -77,14 +77,20 @@ class RobustCPnP:
     def solve(self, y: np.ndarray, epsilon: float, x_init: Optional[np.ndarray] = None) -> Tuple[np.ndarray, ConvergenceInfo]:
         """
         Solve the constrained image restoration problem.
-        
+
         Args:
             y: Noisy observed image
+               - Grayscale: shape (H, W)
+               - Color: shape (H, W, 3)
             epsilon: Constraint radius (noise tolerance)
+                     Note: For color images, epsilon should be ~C× larger
+                     than grayscale (where C = number of channels) to maintain
+                     equivalent per-pixel noise tolerance, since the L¹/L² norms
+                     sum over all elements including the channel dimension.
             x_init: Initial guess for x (default: y)
-            
+
         Returns:
-            x_restored: Restored image
+            x_restored: Restored image (same shape as y)
             info: Convergence information
         """
         if epsilon <= 0:
