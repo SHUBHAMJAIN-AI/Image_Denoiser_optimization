@@ -13,7 +13,7 @@ torchvision>=0.10.0
 
 # Advanced denoisers (optional)
 # bm3d  # Install separately if needed: pip install bm3d
-# deepinv  # Install separately if needed: pip install deepinv
+deepinv>=0.2.0  # Deep learning denoisers with pretrained weights
 
 # Jupyter notebook support (for interactive experiments)
 jupyter>=1.0.0

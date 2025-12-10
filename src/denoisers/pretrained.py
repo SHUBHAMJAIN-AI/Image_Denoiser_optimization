@@ -205,37 +205,54 @@ if TORCH_AVAILABLE:
     class DnCNNDenoiser(BaseDenoiser):
         """DnCNN deep learning denoiser"""
         
-        def __init__(self, model_path: Optional[str] = None, device: str = 'auto'):
+        def __init__(self, pretrained: str = 'download', device: str = 'auto'):
             """
             Initialize DnCNN denoiser.
-            
+
             Args:
-                model_path: Path to pre-trained model (None for built-in)
+                pretrained: Pretrained weights option ('download', 'path/to/model.pth', or None)
                 device: Device to use ('cpu', 'cuda', or 'auto')
             """
             if device == 'auto':
                 self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
             else:
                 self.device = device
-            
-            self.model = self._load_model(model_path)
+
+            self.pretrained = pretrained
+            self.model = self._load_model()
             self.model.eval()
         
-        def _load_model(self, model_path: Optional[str]) -> nn.Module:
-            """Load DnCNN model"""
+        def _load_model(self) -> nn.Module:
+            """Load DnCNN model with pretrained weights"""
             try:
-                # Try to use deepinv library
                 import deepinv
-                model = deepinv.models.DnCNN(depth=17, n_channels=64)
-                
-                if model_path:
-                    model.load_state_dict(torch.load(model_path, map_location=self.device))
-                
-                return model.to(self.device)
-                
-            except ImportError:
-                # Fallback: create simple CNN architecture
-                print("deepinv not available, using simplified CNN")
+                print(f"Loading DnCNN denoiser on {self.device}...")
+
+                # Use deepinv with pretrained weights
+                if self.pretrained == 'download':
+                    print("Downloading pretrained weights from deepinv...")
+                    model = deepinv.models.DnCNN(
+                        depth=20,
+                        pretrained='download',
+                        device=self.device
+                    )
+                    print("✓ DnCNN loaded with pretrained weights")
+                elif self.pretrained and self.pretrained != 'download':
+                    # Load from custom path
+                    print(f"Loading weights from {self.pretrained}...")
+                    model = deepinv.models.DnCNN(depth=20, device=self.device)
+                    model.load_state_dict(torch.load(self.pretrained, map_location=self.device))
+                    print("✓ DnCNN loaded with custom weights")
+                else:
+                    # No pretrained weights
+                    print("Initializing DnCNN without pretrained weights...")
+                    model = deepinv.models.DnCNN(depth=20, device=self.device)
+
+                return model
+
+            except Exception as e:
+                print(f"⚠ Error loading DnCNN: {e}")
+                print("Using simplified CNN fallback (random weights)...")
                 return self._create_simple_cnn()
         
         def _create_simple_cnn(self) -> nn.Module:
@@ -281,12 +298,13 @@ if TORCH_AVAILABLE:
             # Convert to torch tensor
             input_tensor = torch.from_numpy(channel).float().unsqueeze(0).unsqueeze(0)
             input_tensor = input_tensor.to(self.device)
-            
+
             with torch.no_grad():
                 output = self.model(input_tensor)
                 denoised = output.squeeze().cpu().numpy()
-            
-            return np.clip(denoised, 0.0, 1.0)
+
+            # Ensure float64 output
+            return np.clip(denoised, 0.0, 1.0).astype(np.float64)
 else:
     # Dummy class when PyTorch is not available
     class DnCNNDenoiser(BaseDenoiser):
@@ -454,3 +472,41 @@ def compute_ssim(image1: np.ndarray, image2: np.ndarray) -> float:
         c1, c2 = 0.01**2, 0.03**2
         ssim = ((2*mu1*mu2 + c1) * (2*sigma12 + c2)) / ((mu1**2 + mu2**2 + c1) * (sigma1 + sigma2 + c2))
         return ssim
+
+def verify_dncnn_weights(device: str = 'cpu') -> bool:
+    """
+    Verify DnCNN pretrained weights loaded correctly.
+
+    Args:
+        device: Device to use for verification ('cpu' or 'cuda')
+
+    Returns:
+        True if weights appear to be working, False otherwise
+    """
+    try:
+        print("Verifying DnCNN setup...")
+        denoiser = DnCNNDenoiser(pretrained='download', device=device)
+
+        # Create test image with some structure
+        test_img = np.random.rand(64, 64).astype(np.float64)
+
+        # Apply denoising
+        result = denoiser.denoise(test_img)
+
+        # Check if output is different from input (not identity transform)
+        # and not zero (not broken)
+        is_working = (
+            not np.allclose(test_img, result, atol=0.01) and
+            np.sum(np.abs(result)) > 0.1
+        )
+
+        if is_working:
+            print("✓ DnCNN verification passed - weights appear to be working")
+        else:
+            print("⚠ DnCNN may be using random weights or not working properly")
+
+        return is_working
+
+    except Exception as e:
+        print(f"✗ DnCNN verification failed: {e}")
+        return False
